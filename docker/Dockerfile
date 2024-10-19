@@ -14,3 +14,4 @@ RUN curl https://bootstrap.pypa.io/get-pip.py | python3
 RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 && \
     pip cache purge
 RUN pip install pyyaml Pillow numpy opencv-contrib-python scikit-image segmentation-models-pytorch pandas tensorboard
+RUN pip install scipy
