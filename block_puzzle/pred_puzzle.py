@@ -5,6 +5,7 @@ import numpy as np
 import yaml
 import random
 import argparse
+from setuptools._distutils.util import strtobool
 from scipy.spatial.transform import Rotation
 
 import cv2
@@ -40,9 +41,11 @@ def sort_vertex(model_vertex, plane_vector, plane_normal):
     return model_vertex
 
 
-def gen_fitting_model(blockdata):
+def gen_fitting_model(blockdata, issort=True):
     """Generrate fitting model from config"""
     ret = {}
+    eps = 1e-3
+    
     for block in blockdata:
         # print(block['name'])
         convex_vertex_pos = np.array(
@@ -50,55 +53,72 @@ def gen_fitting_model(blockdata):
         concave_vertex_pos = np.array(
             block["concave_vertex_pos"]).reshape((-1, 3))
 
-        eps = 1e-3
         model_vertexs = []
         z_max = np.max(convex_vertex_pos[:, 2])
         plane_normal = np.array([0, 0, 1])
         plane_vector = np.array([1, 0, 0])
         target_ids = np.where(convex_vertex_pos[:, 2] > (z_max - eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(
-            model_vertex, plane_vector, plane_normal))
+        if issort:
+            model_vertexs.append(sort_vertex(
+                model_vertex, plane_vector, plane_normal))
+        else:
+            model_vertexs.append(model_vertex)
 
         z_min = np.min(convex_vertex_pos[:, 2])
         plane_normal = np.array([0, 0, -1])
         plane_vector = np.array([1, 0, 0])
         target_ids = np.where(convex_vertex_pos[:, 2] < (z_min + eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(
-            model_vertex, plane_vector, plane_normal))
+        if issort:
+            model_vertexs.append(sort_vertex(
+                model_vertex, plane_vector, plane_normal))
+        else:
+            model_vertexs.append(model_vertex)
 
         x_max = np.max(convex_vertex_pos[:, 0])
         plane_normal = np.array([1, 0, 0])
         plane_vector = np.array([0, 1, 0])
         target_ids = np.where(convex_vertex_pos[:, 0] > (x_max - eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(
-            model_vertex, plane_vector, plane_normal))
+        if issort:
+            model_vertexs.append(sort_vertex(
+                model_vertex, plane_vector, plane_normal))
+        else:
+            model_vertexs.append(model_vertex)
 
         x_min = np.min(convex_vertex_pos[:, 0])
         plane_normal = np.array([-1, 0, 0])
         plane_vector = np.array([0, 1, 0])
         target_ids = np.where(convex_vertex_pos[:, 0] < (x_min + eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(
-            model_vertex, plane_vector, plane_normal))
+        if issort:
+            model_vertexs.append(sort_vertex(
+                model_vertex, plane_vector, plane_normal))
+        else:
+            model_vertexs.append(model_vertex)
 
         y_max = np.max(convex_vertex_pos[:, 1])
         plane_normal = np.array([0, 1, 0])
         plane_vector = np.array([0, 0, 1])
         target_ids = np.where(convex_vertex_pos[:, 1] > (y_max - eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(
-            model_vertex, plane_vector, plane_normal))
+        if issort:
+            model_vertexs.append(sort_vertex(
+                model_vertex, plane_vector, plane_normal))
+        else:
+            model_vertexs.append(model_vertex)
 
         y_min = np.min(convex_vertex_pos[:, 1])
         plane_normal = np.array([0, -1, 0])
         plane_vector = np.array([0, 0, 1])
         target_ids = np.where(convex_vertex_pos[:, 1] < (y_min + eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(
-            model_vertex, plane_vector, plane_normal))
+        if issort:
+            model_vertexs.append(sort_vertex(
+                model_vertex, plane_vector, plane_normal))
+        else:
+            model_vertexs.append(model_vertex)
 
         # print(model_vertexs)
         # bounding_point = [x_min, x_max, y_min, y_max, z_min, z_max]
@@ -159,7 +179,7 @@ def gen_featrue_map(image, model, device, score_ths=[0.5, 0.3]):
 
 
 # モデルに対してfittingをおこなう
-def fit_model(target_model, convex_pos, pred_convex, cam_mat, dist, itr_num=2000):
+def fit_model(target_model, convex_pos, pred_convex, cam_mat, dist, itr_num=2000, issort=True):
     """Fitting Model"""
     model_vertexs = target_model["model_vertexs"]
     convex_vertex_pos = target_model["convex_vertex_pos"]
@@ -178,23 +198,25 @@ def fit_model(target_model, convex_pos, pred_convex, cam_mat, dist, itr_num=2000
         model_vertex = random.sample(model_vertexs, 1)[0]
         # 点のサンプル
         sample_dat = random.sample(convex_pos_list, len(model_vertex))
-
-        # サンプリングした点を-zの単位ベクトルに対して右回りに並べなおす
-        img_pos = np.array(sample_dat).astype(np.float64)
-        rel_img_pos = img_pos - np.mean(img_pos, axis=0)
-        rel_img_pos = rel_img_pos / \
-            np.linalg.norm(rel_img_pos, axis=1, keepdims=True)
-        cost = np.dot(rel_img_pos, np.array([1, 0]))
-        sint = np.dot(
-            np.cross(
-                np.hstack((rel_img_pos, np.zeros((len(model_vertex), 1)))),
-                np.array([1, 0, 0]),
-            ),
-            np.array([0, 0, -1]),
-        )
-        t = np.arctan2(cost, sint)
-        sort_idx = np.argsort(t)
-        img_pos = img_pos[sort_idx]
+        if issort:
+            # サンプリングした点を-zの単位ベクトルに対して右回りに並べなおす
+            img_pos = np.array(sample_dat).astype(np.float64)
+            rel_img_pos = img_pos - np.mean(img_pos, axis=0)
+            rel_img_pos = rel_img_pos / \
+                np.linalg.norm(rel_img_pos, axis=1, keepdims=True)
+            cost = np.dot(rel_img_pos, np.array([1, 0]))
+            sint = np.dot(
+                np.cross(
+                    np.hstack((rel_img_pos, np.zeros((len(model_vertex), 1)))),
+                    np.array([1, 0, 0]),
+                ),
+                np.array([0, 0, -1]),
+            )
+            t = np.arctan2(cost, sint)
+            sort_idx = np.argsort(t)
+            img_pos = img_pos[sort_idx]
+        else :
+            img_pos = np.array(sample_dat).astype(np.float64)
 
         for j in range(len(img_pos)):
             # 順番を変えながらフィッティングを行う
@@ -267,9 +289,11 @@ def main():
     parser.add_argument('--score_th', type=float,
                         nargs='*', default=[0.5, 0.3])
     parser.add_argument('--itr_num', type=int, default=2000)
+    parser.add_argument('--issort', type=strtobool, default=1)
     args = parser.parse_args()
 
     device = args.device
+    issort = args.issort == 1
 
     with open(args.annotatefile, "r", encoding="utf-8") as f:
         anno_dat = yaml.safe_load(f)
@@ -278,7 +302,7 @@ def main():
     model.to(device)
     model.eval()
 
-    fitting_model = gen_fitting_model(anno_dat["blocks"])
+    fitting_model = gen_fitting_model(anno_dat["blocks"], issort=issort)
     lines = (
         (0, 1), (1, 2), (2, 3), (3, 0),
         (4, 5), (5, 6), (6, 7), (7, 4),
@@ -300,7 +324,7 @@ def main():
         ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
 
         max_score, max_score_dat = fit_model(
-            fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num = args.itr_num
+            fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, issort=issort
         )
 
         result = image.copy()
@@ -349,7 +373,7 @@ def main():
                 concave_pos,
             ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
             max_score, max_score_dat = fit_model(
-                fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num = args.itr_num)
+                fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, issort=issort)
             result = image.copy()
             bounding_point = fitting_model[blockmodel]["bounding_point"]
             bounding_img_point, _ = cv2.projectPoints(
