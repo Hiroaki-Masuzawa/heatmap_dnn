@@ -142,10 +142,10 @@ def gen_featrue_map(image, model, device, score_ths=[0.5, 0.3]):
         concave_pos = np.array(
             np.where(pred_concave_lm[0, 0].cpu().numpy() != 0)).T[:, ::-1]
         # TODO 画面周囲には特徴点がないと仮定するとマッチングがよくなるので実施しているがこの過程良いのか？
-        convex_pos = convex_pos[convex_pos[:,0]!=0]
-        convex_pos = convex_pos[convex_pos[:,0]!=511]
-        convex_pos = convex_pos[convex_pos[:,1]!=0]
-        convex_pos = convex_pos[convex_pos[:,1]!=511]
+        convex_pos = convex_pos[convex_pos[:, 0] != 0]
+        convex_pos = convex_pos[convex_pos[:, 0] != 511]
+        convex_pos = convex_pos[convex_pos[:, 1] != 0]
+        convex_pos = convex_pos[convex_pos[:, 1] != 511]
         if len(convex_pos) > 5:
             break
     return (
