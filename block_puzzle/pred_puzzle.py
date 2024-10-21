@@ -45,8 +45,10 @@ def gen_fitting_model(blockdata):
     ret = {}
     for block in blockdata:
         # print(block['name'])
-        convex_vertex_pos = np.array(block["convex_vertex_pos"]).reshape((-1, 3))
-        concave_vertex_pos = np.array(block["concave_vertex_pos"]).reshape((-1, 3))
+        convex_vertex_pos = np.array(
+            block["convex_vertex_pos"]).reshape((-1, 3))
+        concave_vertex_pos = np.array(
+            block["concave_vertex_pos"]).reshape((-1, 3))
 
         eps = 1e-3
         model_vertexs = []
@@ -55,42 +57,48 @@ def gen_fitting_model(blockdata):
         plane_vector = np.array([1, 0, 0])
         target_ids = np.where(convex_vertex_pos[:, 2] > (z_max - eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(model_vertex, plane_vector, plane_normal))
+        model_vertexs.append(sort_vertex(
+            model_vertex, plane_vector, plane_normal))
 
         z_min = np.min(convex_vertex_pos[:, 2])
         plane_normal = np.array([0, 0, -1])
         plane_vector = np.array([1, 0, 0])
         target_ids = np.where(convex_vertex_pos[:, 2] < (z_min + eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(model_vertex, plane_vector, plane_normal))
+        model_vertexs.append(sort_vertex(
+            model_vertex, plane_vector, plane_normal))
 
         x_max = np.max(convex_vertex_pos[:, 0])
         plane_normal = np.array([1, 0, 0])
         plane_vector = np.array([0, 1, 0])
         target_ids = np.where(convex_vertex_pos[:, 0] > (x_max - eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(model_vertex, plane_vector, plane_normal))
+        model_vertexs.append(sort_vertex(
+            model_vertex, plane_vector, plane_normal))
 
         x_min = np.min(convex_vertex_pos[:, 0])
         plane_normal = np.array([-1, 0, 0])
         plane_vector = np.array([0, 1, 0])
         target_ids = np.where(convex_vertex_pos[:, 0] < (x_min + eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(model_vertex, plane_vector, plane_normal))
+        model_vertexs.append(sort_vertex(
+            model_vertex, plane_vector, plane_normal))
 
         y_max = np.max(convex_vertex_pos[:, 1])
         plane_normal = np.array([0, 1, 0])
         plane_vector = np.array([0, 0, 1])
         target_ids = np.where(convex_vertex_pos[:, 1] > (y_max - eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(model_vertex, plane_vector, plane_normal))
+        model_vertexs.append(sort_vertex(
+            model_vertex, plane_vector, plane_normal))
 
         y_min = np.min(convex_vertex_pos[:, 1])
         plane_normal = np.array([0, -1, 0])
         plane_vector = np.array([0, 0, 1])
         target_ids = np.where(convex_vertex_pos[:, 1] < (y_min + eps))[0]
         model_vertex = convex_vertex_pos[target_ids]
-        model_vertexs.append(sort_vertex(model_vertex, plane_vector, plane_normal))
+        model_vertexs.append(sort_vertex(
+            model_vertex, plane_vector, plane_normal))
 
         # print(model_vertexs)
         # bounding_point = [x_min, x_max, y_min, y_max, z_min, z_max]
@@ -115,7 +123,7 @@ def gen_fitting_model(blockdata):
     return ret
 
 
-def gen_featrue_map(image, model, device):
+def gen_featrue_map(image, model, device, score_ths=[0.5, 0.3]):
     """Generate feature map"""
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255
     image_rgb = np.transpose(image_rgb, (2, 0, 1))[np.newaxis]
@@ -124,17 +132,20 @@ def gen_featrue_map(image, model, device):
     pred_convex = pred[:, 0:1].clone()
     pred_concave = pred[:, 1:2].clone()
 
-    for score_th in [0.5, 0.3]:
+    for score_th in score_ths:
         pred_convex_lm = get_localmax(pred_convex, 13, score_th)
         pred_concave_lm = get_localmax(pred_concave, 13, score_th)
         # pred_convex_np = (pred_convex.cpu()*255).numpy().astype(np.uint8)[0,0]
         # pred_concave_np = (pred_concave.cpu()*255).numpy().astype(np.uint8)[0,0]
-        convex_pos = np.array(np.where(pred_convex_lm[0, 0].cpu().numpy() != 0)).T[
-            :, ::-1
-        ]
-        concave_pos = np.array(np.where(pred_concave_lm[0, 0].cpu().numpy() != 0)).T[
-            :, ::-1
-        ]
+        convex_pos = np.array(
+            np.where(pred_convex_lm[0, 0].cpu().numpy() != 0)).T[:, ::-1]
+        concave_pos = np.array(
+            np.where(pred_concave_lm[0, 0].cpu().numpy() != 0)).T[:, ::-1]
+        # TODO 画面周囲には特徴点がないと仮定するとマッチングがよくなるので実施しているがこの過程良いのか？
+        convex_pos = convex_pos[convex_pos[:,0]!=0]
+        convex_pos = convex_pos[convex_pos[:,0]!=511]
+        convex_pos = convex_pos[convex_pos[:,1]!=0]
+        convex_pos = convex_pos[convex_pos[:,1]!=511]
         if len(convex_pos) > 5:
             break
     return (
@@ -171,7 +182,8 @@ def fit_model(target_model, convex_pos, pred_convex, cam_mat, dist, itr_num=2000
         # サンプリングした点を-zの単位ベクトルに対して右回りに並べなおす
         img_pos = np.array(sample_dat).astype(np.float64)
         rel_img_pos = img_pos - np.mean(img_pos, axis=0)
-        rel_img_pos = rel_img_pos / np.linalg.norm(rel_img_pos, axis=1, keepdims=True)
+        rel_img_pos = rel_img_pos / \
+            np.linalg.norm(rel_img_pos, axis=1, keepdims=True)
         cost = np.dot(rel_img_pos, np.array([1, 0]))
         sint = np.dot(
             np.cross(
@@ -187,13 +199,16 @@ def fit_model(target_model, convex_pos, pred_convex, cam_mat, dist, itr_num=2000
         for j in range(len(img_pos)):
             # 順番を変えながらフィッティングを行う
             if j != 0:
-                img_posd = np.array(img_pos.tolist()[j:] + img_pos.tolist()[:j])
+                img_posd = np.array(
+                    img_pos.tolist()[j:] + img_pos.tolist()[:j])
             else:
                 img_posd = img_pos
             # PnPで並進，回転ベクトルを求める
-            ret, rvec, tvec = cv2.solvePnP(model_vertex, img_posd, cam_mat, dist)
+            ret, rvec, tvec = cv2.solvePnP(
+                model_vertex, img_posd, cam_mat, dist)
             # モデルの頂点の投影位置を求める
-            point, _ = cv2.projectPoints(convex_vertex_pos, rvec, tvec, cam_mat, dist)
+            point, _ = cv2.projectPoints(
+                convex_vertex_pos, rvec, tvec, cam_mat, dist)
 
             # モデルの投影位置のヒートマップ値の積を求めたいが，
             # アンダーフローする可能性があるので，ヒートマップの積ではなくlogの和を取る
@@ -247,7 +262,11 @@ def main():
         "--annotatefile", type=str, default="/dataset/puzzle_block/test/annotation.yaml"
     )
     parser.add_argument("--output", type=str, default="")
-    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
+    parser.add_argument("--device", type=str,
+                        default="cuda", choices=["cpu", "cuda"])
+    parser.add_argument('--score_th', type=float,
+                        nargs='*', default=[0.5, 0.3])
+    parser.add_argument('--itr_num', type=int, default=2000)
     args = parser.parse_args()
 
     device = args.device
@@ -267,7 +286,8 @@ def main():
     )
 
     if args.input != "":
-        cam_mat = np.array(anno_dat["annotations"][0]["camera_matrix"]).reshape(3, 3)  # TODO
+        cam_mat = np.array(anno_dat["annotations"]
+                           [0]["camera_matrix"]).reshape(3, 3)  # TODO
         dist = np.zeros((5))
         image = cv2.imread(args.input)
         (
@@ -277,10 +297,10 @@ def main():
             pred_concave_lm,
             convex_pos,
             concave_pos,
-        ) = gen_featrue_map(image, model, device)
+        ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
 
         max_score, max_score_dat = fit_model(
-            fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist
+            fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num = args.itr_num
         )
 
         result = image.copy()
@@ -288,7 +308,8 @@ def main():
         bounding_img_point, _ = cv2.projectPoints(
             bounding_point, max_score_dat["rvec"], max_score_dat["tvec"], cam_mat, dist
         )
-        bounding_img_point = bounding_img_point.reshape((-1, 2)).astype(np.int64)
+        bounding_img_point = bounding_img_point.reshape(
+            (-1, 2)).astype(np.int64)
         for line in lines:
             result = cv2.line(
                 result,
@@ -299,8 +320,12 @@ def main():
             )
         output_image = cv2.hconcat(
             [image,
-             cv2.cvtColor((pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
-             cv2.cvtColor((pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
+             cv2.cvtColor(
+                 (pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
+             cv2.cvtColor(
+                 (pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
+             cv2.cvtColor(
+                 (pred_convex_lm.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
              result,
              ]
         )
@@ -310,7 +335,8 @@ def main():
         # 評価用コード
         for anno in anno_dat["annotations"]:
             dist = np.zeros((5))
-            image_file = os.path.join(os.path.dirname(args.annotatefile), anno["imagefile"])
+            image_file = os.path.join(os.path.dirname(
+                args.annotatefile), anno["imagefile"])
             cam_mat = np.array(anno["camera_matrix"]).reshape(3, 3)
             image = cv2.imread(image_file)
             blockmodel = anno["block_name"]
@@ -321,8 +347,9 @@ def main():
                 pred_concave_lm,
                 convex_pos,
                 concave_pos,
-            ) = gen_featrue_map(image, model, device)
-            max_score, max_score_dat = fit_model(fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist)
+            ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
+            max_score, max_score_dat = fit_model(
+                fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num = args.itr_num)
             result = image.copy()
             bounding_point = fitting_model[blockmodel]["bounding_point"]
             bounding_img_point, _ = cv2.projectPoints(
@@ -332,7 +359,8 @@ def main():
                 cam_mat,
                 dist,
             )
-            bounding_img_point = bounding_img_point.reshape((-1, 2)).astype(np.int64)
+            bounding_img_point = bounding_img_point.reshape(
+                (-1, 2)).astype(np.int64)
             for line in lines:
                 result = cv2.line(
                     result,
@@ -343,8 +371,10 @@ def main():
                 )
             output_image = cv2.hconcat(
                 [image,
-                 cv2.cvtColor((pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
-                 cv2.cvtColor((pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+                 cv2.cvtColor(
+                     (pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+                 cv2.cvtColor(
+                     (pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
                  result,
                  ]
             )
@@ -352,7 +382,8 @@ def main():
                 cv2.imwrite(args.output, output_image)
             else:
                 os.makedirs('result', exist_ok=True)
-                output_file = os.path.basename(image_file).replace('image', 'result')
+                output_file = os.path.basename(
+                    image_file).replace('image', 'result')
                 cv2.imwrite(os.path.join('result', output_file), output_image)
 
             camera_rvec = quat2rvec(anno["camera_orientation"])
@@ -371,46 +402,59 @@ def main():
             Proj = Proj2 @ Proj1
             diff_trans, diff_rot = get_Pscore(Proj)
             if blockmodel == "cyan_block":
-                alt_proj = Proj2 @ np.array([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) @ Proj1
+                alt_proj = Proj2 @ np.array([[-1, 0, 0, 0], [0, -1, 0, 0],
+                                            [0, 0, 1, 0], [0, 0, 0, 1]]) @ Proj1
                 alt_diff_trans, alt_diff_rot = get_Pscore(alt_proj)
                 if alt_diff_rot < diff_rot and alt_diff_trans < diff_trans:
                     diff_rot = alt_diff_rot
                     diff_trans = alt_diff_trans
             elif blockmodel == "red_block":
-                alt_proj = Proj2 @ np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj = Proj2 @ np.array([[1, 0, 0, 0], [0, -1, 0, 0],
+                                            [0, 0, -1, 0.03], [0, 0, 0, 1]]) @ Proj1
                 alt_diff_trans, alt_diff_rot = get_Pscore(alt_proj)
                 if alt_diff_rot < diff_rot and alt_diff_trans < diff_trans:
                     diff_rot = alt_diff_rot
                     diff_trans = alt_diff_trans
             elif blockmodel == "green_block":
-                alt_proj1 = Proj2 @ np.array([[0, 0, -1, 0.03], [1, 0, 0, 0], [0, -1, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
-                alt_proj2 = Proj2 @ np.array([[0, 1, 0, 0], [0, 0, -1, 0.03], [-1, 0, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj1 = Proj2 @ np.array([[0, 0, -1, 0.03], [1, 0, 0, 0], [
+                                             0, -1, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj2 = Proj2 @ np.array(
+                    [[0, 1, 0, 0], [0, 0, -1, 0.03], [-1, 0, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
                 for alt_proj in [alt_proj1, alt_proj2]:
                     alt_diff_trans, alt_diff_rot = get_Pscore(alt_proj)
                     if alt_diff_rot < diff_rot and alt_diff_trans < diff_trans:
                         diff_rot = alt_diff_rot
                         diff_trans = alt_diff_trans
             elif blockmodel == "brown_block":
-                alt_proj1 = Proj2 @ np.array([[0, 0, 1, 0], [0, 1, 0, 0], [-1, 0, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
-                alt_proj2 = Proj2 @ np.array([[-1, 0, 0, 0.03], [0, 1, 0, 0], [0, 0, -1, 0.03], [0, 0, 0, 1]]) @ Proj1
-                alt_proj3 = Proj2 @ np.array([[0, 0, -1, 0.03], [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]) @ Proj1
-                alt_proj4 = Proj2 @ np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0.03], [0, 0, 0, 1]]) @ Proj1
-                alt_proj5 = Proj2 @ np.array([[0, 0, 1, 0], [0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]) @ Proj1
-                alt_proj6 = Proj2 @ np.array([[-1, 0, 0, 0.03], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]) @ Proj1
-                alt_proj7 = Proj2 @ np.array([[0, 0, -1, 0.03], [0, -1, 0, 0], [-1, 0, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj1 = Proj2 @ np.array(
+                    [[0, 0, 1, 0], [0, 1, 0, 0], [-1, 0, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj2 = Proj2 @ np.array([[-1, 0, 0, 0.03], [0, 1, 0, 0], [
+                                             0, 0, -1, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj3 = Proj2 @ np.array([[0, 0, -1, 0.03],
+                                             [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]) @ Proj1
+                alt_proj4 = Proj2 @ np.array(
+                    [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj5 = Proj2 @ np.array(
+                    [[0, 0, 1, 0], [0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]) @ Proj1
+                alt_proj6 = Proj2 @ np.array([[-1, 0, 0, 0.03], [0, -1, 0, 0], [
+                                             0, 0, 1, 0], [0, 0, 0, 1]]) @ Proj1
+                alt_proj7 = Proj2 @ np.array(
+                    [[0, 0, -1, 0.03], [0, -1, 0, 0], [-1, 0, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
                 for alt_proj in [alt_proj1, alt_proj2, alt_proj3, alt_proj4, alt_proj5, alt_proj6, alt_proj7]:
                     alt_diff_trans, alt_diff_rot = get_Pscore(alt_proj)
                     if alt_diff_rot < diff_rot and alt_diff_trans < diff_trans:
                         diff_rot = alt_diff_rot
                         diff_trans = alt_diff_trans
             elif blockmodel == "purple_block":
-                alt_proj = Proj2 @ np.array([[-1, 0, 0, 0.03], [0, 0, 1, -0.03], [0, 1, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj = Proj2 @ np.array([[-1, 0, 0, 0.03], [0, 0, 1, -0.03], [
+                                            0, 1, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
                 alt_diff_trans, alt_diff_rot = get_Pscore(alt_proj)
                 if alt_diff_rot < diff_rot and alt_diff_trans < diff_trans:
                     diff_rot = alt_diff_rot
                     diff_trans = alt_diff_trans
             elif blockmodel == "lightgreen_block":
-                alt_proj = Proj2 @ np.array([[-1, 0, 0, 0], [0, 0, 1, -0.03], [0, 1, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
+                alt_proj = Proj2 @ np.array([[-1, 0, 0, 0], [0, 0, 1, -0.03], [
+                                            0, 1, 0, 0.03], [0, 0, 0, 1]]) @ Proj1
                 alt_diff_trans, alt_diff_rot = get_Pscore(alt_proj)
                 if alt_diff_rot < diff_rot and alt_diff_trans < diff_trans:
                     diff_rot = alt_diff_rot

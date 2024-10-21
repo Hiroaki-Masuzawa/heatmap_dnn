@@ -3,6 +3,7 @@ val/*
 *.csv
 *.pth
 *.png
+*.JPG
 docker/homedir/*
 !docker/homedir/.gitkeep
 output*
