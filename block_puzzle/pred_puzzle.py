@@ -8,7 +8,6 @@ import yaml
 import random
 import argparse
 import itertools
-from setuptools._distutils.util import strtobool
 from scipy.spatial.transform import Rotation
 
 import cv2
@@ -212,7 +211,7 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
     # concave_vertex_pos = target_model['concave_vertex_pos']
 
     min_score = 1e-2
-    min_logscore = np.log(min_score)
+    min_logscore = np.log10(min_score)
     max_score = -1e100
     max_score_dat = {}
 
@@ -273,7 +272,7 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
                     if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
                         value = float(score_map[p[1], p[0]])
                         if value >= min_score:
-                            score_list.append(np.log(value))
+                            score_list.append(np.log10(value))
                         else:
                             score_list.append(min_logscore)
                     else:
@@ -311,7 +310,7 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
                     if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
                         value = float(score_map[p[1], p[0]])
                         if value >= min_score:
-                            score_list.append(np.log(value))
+                            score_list.append(np.log10(value))
                         else:
                             score_list.append(min_logscore)
                     else:
@@ -356,7 +355,7 @@ def calc_scores(inputs):
         if px >= 0 and py >= 0 and px < image_width and py < image_height:
             value = float(score_map[py, px])
             if value >= min_score:
-                score_list.append(np.log(value))
+                score_list.append(np.log10(value))
             else:
                 score_list.append(min_logscore)
         else:
@@ -368,14 +367,14 @@ def calc_scores(inputs):
 # モデルに対してfittingをおこなう
 
 
-def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=512, image_height=512, itr_num=2000, use_ransac=True):
+def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=512, image_height=512, itr_num=2000, use_ransac=True, bruteforce=False, cut_score_th=-15):
     """Fitting Model"""
     model_vertexs = target_model["model_vertexs"]
     convex_vertex_pos = target_model["convex_vertex_pos"]
     # concave_vertex_pos = target_model['concave_vertex_pos']
 
     min_score = 1e-2
-    min_logscore = np.log(min_score)
+    min_logscore = np.log10(min_score)
     max_score = -1e100
     max_score_dat = {}
 
@@ -399,7 +398,7 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
             model_vertex_np = np.array(model_vertex).astype(np.float64)
             image_vertex_np = np.array(sample_dat).astype(np.float64)
             num, rvecs, tvecs = cv2.solveP3P(model_vertex_np, image_vertex_np,
-                                                cam_mat, dist, flags=cv2.SOLVEPNP_P3P)
+                                             cam_mat, dist, flags=cv2.SOLVEPNP_P3P)
             rvec_list.extend(rvecs)
             tvec_list.extend(tvecs)
 
@@ -413,7 +412,7 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
                 if 0 <= px < image_width and 0 <= py < image_height:
                     value = float(score_map[py, px])
                     if value >= min_score:
-                        score_list.append(np.log(value))
+                        score_list.append(np.log10(value))
                     else:
                         score_list.append(min_logscore)
                 else:
@@ -427,7 +426,7 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
                     "tvec": tvec,
                     "point": point.reshape((-1, 2)),
                 }
-    else:
+    elif bruteforce:
         for _, model_vertex in enumerate(list(itertools.permutations(convex_vertex_pos_list, 3))):
             for _, sample_dat in enumerate(list(itertools.permutations(convex_pos_list, 3))):
                 # PnPで並進，回転ベクトルを求める
@@ -445,7 +444,7 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
                         if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
                             value = float(score_map[p[1], p[0]])
                             if value >= min_score:
-                                score_list.append(np.log(value))
+                                score_list.append(np.log10(value))
                             else:
                                 score_list.append(min_logscore)
                         else:
@@ -459,6 +458,47 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
                             "tvec": tvec,
                             "point": point.reshape((-1, 2)),
                         }
+    else:
+        convex_pos_score = [float(score_map[p[1], p[0]])
+                            for p in convex_pos_list]
+        idxs = np.argsort(convex_pos_score)[::-1]
+        for _, sample_dat_idx in enumerate(list(itertools.permutations(idxs, 3))):
+            for _, model_vertex in enumerate(list(itertools.permutations(convex_vertex_pos_list, 3))):
+                # PnPで並進，回転ベクトルを求める
+                model_vertex_np = np.array(model_vertex).astype(np.float64)
+                image_vertex_np = np.array(
+                    [convex_pos_list[idx] for idx in sample_dat_idx]).astype(np.float64)
+                num, rvecs, tvecs = cv2.solveP3P(model_vertex_np, image_vertex_np,
+                                                 cam_mat, dist, flags=cv2.SOLVEPNP_P3P)
+                # # モデルの頂点の投影位置を求める
+                for rvec, tvec in zip(rvecs, tvecs):
+                    point, _ = cv2.projectPoints(
+                        convex_vertex_pos, rvec, tvec, cam_mat, dist)
+                    point_int = point.astype(np.int64).reshape((-1, 2))
+                    score_list = []
+                    for p in point_int:
+                        if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
+                            value = float(score_map[p[1], p[0]])
+                            if value >= min_score:
+                                score_list.append(np.log10(value))
+                            else:
+                                score_list.append(min_logscore)
+                        else:
+                            score_list.append(min_logscore)
+                    # 出現した中で最大のものを保存する
+                    score_sum = np.sum(score_list)
+                    if score_sum > max_score:
+                        max_score = score_sum
+                        max_score_dat = {
+                            "rvec": rvec,
+                            "tvec": tvec,
+                            "point": point.reshape((-1, 2)),
+                        }
+                if max_score > cut_score_th:
+                    break
+            if max_score > cut_score_th:
+                break
+
     return max_score, max_score_dat
 
 
@@ -477,6 +517,7 @@ def get_Pscore(Pmat):
 
 
 def main():
+    from setuptools._distutils.util import strtobool
     parser = argparse.ArgumentParser(
         prog="",  # プログラム名
         usage="",  # プログラムの利用方法
@@ -497,6 +538,7 @@ def main():
     parser.add_argument('--issort', type=strtobool, default=1)
     parser.add_argument('--use_p3p', type=strtobool, default=1)
     parser.add_argument('--use_ransac', type=strtobool, default=1)
+    parser.add_argument('--cut_score_th', type=float, default=-7)
     args = parser.parse_args()
 
     device = args.device
@@ -522,6 +564,7 @@ def main():
         cam_mat = np.array(anno_dat["annotations"]
                            [0]["camera_matrix"]).reshape(3, 3)  # TODO
         dist = np.zeros((5))
+        start_time = time.time()
         image = cv2.imread(args.input)
         (
             pred_convex,
@@ -532,10 +575,9 @@ def main():
             concave_pos,
         ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
 
-        start_time = time.time()
         if use_p3p:
             max_score, max_score_dat = fit2model_p3p(
-                fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac
+                fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac, cut_score_th=args.cut_score_th
             )
         else:
             max_score, max_score_dat = fit2model(
@@ -594,7 +636,7 @@ def main():
             start_time = time.time()
             if use_p3p:
                 max_score, max_score_dat = fit2model_p3p(
-                    fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac)
+                    fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac, cut_score_th=args.cut_score_th)
             else:
                 max_score, max_score_dat = fit2model(
                     fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, issort=issort, use_ransac=use_ransac)
