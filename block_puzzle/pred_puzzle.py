@@ -173,8 +173,12 @@ def gen_featrue_map(image, model, device, score_ths=[0.5, 0.3], min_convex=6):
     image_rgb = np.transpose(image_rgb, (2, 0, 1))[np.newaxis]
     image_tensor = torch.Tensor(image_rgb)
     pred = (model(image_tensor.to(device)).sigmoid()).detach()
+    pred_ch = pred.shape[1]
     pred_convex = pred[:, 0:1].clone()
     pred_concave = pred[:, 1:2].clone()
+    if pred_ch == 4:
+        pred_hidden_convex = pred[:, 2:3].clone()
+        pred_hidden_concave = pred[:, 3:4].clone()
 
     for score_th in score_ths:
         pred_convex_lm = get_localmax(pred_convex, 13, score_th)
@@ -193,18 +197,59 @@ def gen_featrue_map(image, model, device, score_ths=[0.5, 0.3], min_convex=6):
         if len(convex_pos) > min_convex:
             # print(score_th)
             break
-    return (
-        pred_convex,
-        pred_concave,
-        pred_convex_lm,
-        pred_concave_lm,
-        convex_pos,
-        concave_pos,
-    )
+    ret_dict = {
+        "pred_convex": pred_convex,
+        "pred_concave": pred_concave,
+        "pred_convex_lm": pred_convex_lm,
+        "pred_concave_lm": pred_concave_lm,
+        "convex_pos": convex_pos,
+        "concave_pos": concave_pos,
+    }
+    if pred_ch == 4:
+        ret_dict["pred_hidden_convex"] = pred_hidden_convex
+        ret_dict["pred_hidden_concave"] = pred_hidden_concave
+
+    return ret_dict
+
+
+def eval_score(points, image_width, image_height, score_map, hidden_score_map=None, min_score=1e-2):
+    if True:
+        min_logscore = math.log10(min_score)
+        score_list = []
+        for px, py in points:
+            if px >= 0 and py >= 0 and px < image_width and py < image_height:
+                if hidden_score_map is not None:
+                    value = max(float(score_map[py, px]), float(
+                        hidden_score_map[py, px]))
+                else:
+                    value = float(score_map[py, px])
+                if value >= min_score:
+                    score_list.append(np.log10(value))
+                else:
+                    score_list.append(min_logscore)
+            else:
+                score_list.append(min_logscore)
+        return np.sum(score_list)
+    else:
+        score_list = []
+        for px, py in points:
+            if px >= 0 and py >= 0 and px < image_width and py < image_height:
+                if hidden_score_map is not None:
+                    value = max(float(score_map[py, px]), float(
+                        hidden_score_map[py, px]))
+                else:
+                    value = float(score_map[py, px])
+                if value >= min_score:
+                    score_list.append(value)
+                else:
+                    score_list.append(min_score)
+            else:
+                score_list.append(min_score)
+        return np.mean(score_list)
 
 
 # モデルに対してfittingをおこなう
-def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=512, image_height=512, itr_num=2000, issort=True, use_ransac=True):
+def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=512, image_height=512, itr_num=2000, issort=True, use_ransac=True, pred_hidden_convex=None):
     """Fitting Model"""
     model_vertexs = target_model["model_vertexs"]
     convex_vertex_pos = target_model["convex_vertex_pos"]
@@ -214,8 +259,13 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
     min_logscore = np.log10(min_score)
     max_score = -1e100
     max_score_dat = {}
+    cur_itr_num = 0
 
     score_map = pred_convex.cpu()[0, 0].numpy()
+    if pred_hidden_convex is not None:
+        hidden_score_map = pred_hidden_convex.cpu()[0, 0].numpy()
+    else:
+        hidden_score_map = None
     convex_pos_list = convex_pos.tolist()
 
     if use_ransac:
@@ -268,9 +318,13 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
                 # アンダーフローする可能性があるので，ヒートマップの積ではなくlogの和を取る
                 point_int = point.astype(np.int64).reshape((-1, 2))
                 score_list = []
-                for p in point_int:
-                    if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
-                        value = float(score_map[p[1], p[0]])
+                for px, py in point_int:
+                    if 0 <= px < image_width and 0 <= py < image_height:
+                        if hidden_score_map is not None:
+                            value = max(float(score_map[py, px]), float(
+                                hidden_score_map[py, px]))
+                        else:
+                            value = float(score_map[py, px])
                         if value >= min_score:
                             score_list.append(np.log10(value))
                         else:
@@ -286,6 +340,7 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
                         "tvec": tvec,
                         "point": point.reshape((-1, 2)),
                     }
+                cur_itr_num += 1
     else:
         for model_vertex in model_vertexs:
             for _, sample_dat in enumerate(list(itertools.permutations(convex_pos_list, len(model_vertex)))):
@@ -306,9 +361,13 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
                 # アンダーフローする可能性があるので，ヒートマップの積ではなくlogの和を取る
                 point_int = point.astype(np.int64).reshape((-1, 2))
                 score_list = []
-                for p in point_int:
-                    if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
-                        value = float(score_map[p[1], p[0]])
+                for px, py in point_int:
+                    if 0 <= px < image_width and 0 <= py < image_height:
+                        if hidden_score_map is not None:
+                            value = max(float(score_map[py, px]), float(
+                                hidden_score_map[py, px]))
+                        else:
+                            value = float(score_map[py, px])
                         if value >= min_score:
                             score_list.append(np.log10(value))
                         else:
@@ -324,62 +383,45 @@ def fit2model(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=
                         "tvec": tvec,
                         "point": point.reshape((-1, 2)),
                     }
+                cur_itr_num += 1
+    max_score_dat["itr_num"] = cur_itr_num
     return max_score, max_score_dat
 
 
-def calc_fitparams(inputs):
-    model_vertex_np = inputs[0]
-    image_vertex_np = inputs[1]
-    cam_mat = inputs[2]
-    dist = inputs[3]
-    num, rvecs, tvecs = cv2.solveP3P(model_vertex_np, image_vertex_np,
-                                     cam_mat, dist, flags=cv2.SOLVEPNP_P3P)
-    return (rvecs, tvecs)
-
-
-def calc_scores(inputs):
-    rvec = inputs[0]
-    tvec = inputs[1]
-    cam_mat = inputs[2]
-    dist = inputs[3]
-    convex_vertex_pos = inputs[4]
-    image_width = inputs[5]
-    image_height = inputs[6]
-    score_map = inputs[7]
-    min_score = inputs[8]
-    min_logscore = inputs[9]
-    point, _ = cv2.projectPoints(convex_vertex_pos, rvec, tvec, cam_mat, dist)
-    point_int = point.astype(np.int64).reshape((-1, 2))
-    score_list = []
-    for px, py in point_int:
-        if px >= 0 and py >= 0 and px < image_width and py < image_height:
-            value = float(score_map[py, px])
-            if value >= min_score:
-                score_list.append(np.log10(value))
-            else:
-                score_list.append(min_logscore)
-        else:
-            score_list.append(min_logscore)
-    # 出現した中で最大のものを保存する
-    score_sum = np.sum(score_list)
-    return (score_sum, point, rvec, tvec)
-
-# モデルに対してfittingをおこなう
-
-
-def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_width=512, image_height=512, itr_num=2000, use_ransac=True, bruteforce=False, cut_score_th=-15):
+def fit2model_p3p(target_model,
+                  convex_pos,
+                  pred_convex,
+                  concave_pos,
+                  pred_concave,
+                  cam_mat,
+                  dist,
+                  image_width=512,
+                  image_height=512,
+                  itr_num=2000,
+                  use_ransac=True,
+                  bruteforce=False,
+                  cut_score_th=-15,
+                  pred_hidden_convex=None,
+                  eval_type='convination'):
     """Fitting Model"""
     model_vertexs = target_model["model_vertexs"]
     convex_vertex_pos = target_model["convex_vertex_pos"]
-    # concave_vertex_pos = target_model['concave_vertex_pos']
+    concave_vertex_pos = target_model['concave_vertex_pos']
 
     min_score = 1e-2
     min_logscore = np.log10(min_score)
     max_score = -1e100
+    best_mean_dist = 0
     max_score_dat = {}
+    cur_itr_num = 0
 
     score_map = pred_convex.cpu()[0, 0].numpy()
+    if pred_hidden_convex is not None:
+        hidden_score_map = pred_hidden_convex.cpu()[0, 0].numpy()
+    else:
+        hidden_score_map = None
     convex_pos_list = convex_pos.tolist()
+    concave_pos_list = concave_pos.tolist()
     convex_vertex_pos_list = convex_vertex_pos.tolist()
 
     if use_ransac:
@@ -407,25 +449,32 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
             point, _ = cv2.projectPoints(
                 convex_vertex_pos, rvec, tvec, cam_mat, dist)
             point_int = point.astype(np.int64).reshape((-1, 2))
-            score_list = []
-            for px, py in point_int:
-                if 0 <= px < image_width and 0 <= py < image_height:
-                    value = float(score_map[py, px])
-                    if value >= min_score:
-                        score_list.append(np.log10(value))
-                    else:
-                        score_list.append(min_logscore)
-                else:
-                    score_list.append(min_logscore)
-            # 出現した中で最大のものを保存する
-            score_sum = np.sum(score_list)
-            if score_sum > max_score:
-                max_score = score_sum
+            # score_list = []
+            # for px, py in point_int:
+            #     if 0 <= px < image_width and 0 <= py < image_height:
+            #         if hidden_score_map is not None:
+            #             value = max(float(score_map[py, px]), float(
+            #                 hidden_score_map[py, px]))
+            #         else:
+            #             value = float(score_map[py, px])
+            #         if value >= min_score:
+            #             score_list.append(np.log10(value))
+            #         else:
+            #             score_list.append(min_logscore)
+            #     else:
+            #         score_list.append(min_logscore)
+            # # 出現した中で最大のものを保存する
+            # score_sum = np.sum(score_list)
+            score = eval_score(point_int, image_width, image_height,
+                               score_map, hidden_score_map, min_score)
+            if score > max_score:
+                max_score = score
                 max_score_dat = {
                     "rvec": rvec,
                     "tvec": tvec,
                     "point": point.reshape((-1, 2)),
                 }
+            cur_itr_num += 1
     elif bruteforce:
         for _, model_vertex in enumerate(list(itertools.permutations(convex_vertex_pos_list, 3))):
             for _, sample_dat in enumerate(list(itertools.permutations(convex_pos_list, 3))):
@@ -440,9 +489,13 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
                         convex_vertex_pos, rvec, tvec, cam_mat, dist)
                     point_int = point.astype(np.int64).reshape((-1, 2))
                     score_list = []
-                    for p in point_int:
-                        if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
-                            value = float(score_map[p[1], p[0]])
+                    for px, py in point_int:
+                        if px >= 0 and py >= 0 and px < image_width and py < image_height:
+                            if hidden_score_map is not None:
+                                value = max(float(score_map[py, px]), float(
+                                    hidden_score_map[py, px]))
+                            else:
+                                value = float(score_map[py, px])
                             if value >= min_score:
                                 score_list.append(np.log10(value))
                             else:
@@ -462,6 +515,119 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
         convex_pos_score = [float(score_map[p[1], p[0]])
                             for p in convex_pos_list]
         idxs = np.argsort(convex_pos_score)[::-1]
+
+        point_img = np.ones((image_height, image_width), dtype=np.uint8)*255
+        for p in convex_pos_list:
+            point_img[int(p[1]), int(p[0])] = 0
+        dist_img = cv2.distanceTransform(point_img,
+                                         distanceType=cv2.DIST_L2,
+                                         maskSize=5
+                                         )
+
+        
+        if eval_type == 'area_size':
+            def eval_func(c_p): return abs(np.cross(
+                np.array(c_p[1])-np.array(c_p[0]), np.array(c_p[2])-np.array(c_p[0]))[2])/2
+        elif eval_type == 'prob':
+            def eval_func(c_p): return np.prod(
+                [float(score_map[int(p[1]), int(p[0])]) for p in c_p])
+        elif eval_type == 'convination':
+            def eval_func(c_p): return abs(np.cross(np.array(c_p[1])-np.array(c_p[0]), np.array(
+                c_p[2])-np.array(c_p[0]))[2])/2 * np.prod([float(score_map[int(p[1]), int(p[0])]) for p in c_p])
+
+        # convination_points = list(itertools.permutations(np.hstack((np.array(convex_pos_list), np.zeros((len(convex_pos_list),1)))).tolist(), 3))
+        # sorted_convination_points = sorted(convination_points, key=eval_func, reverse=True)
+        # sorted_convination_points_idx = sorted(list(range(len(convination_points))), key=[eval_func(p) for p in convination_points].__getitem__, reverse=True)
+
+        convination_idxs_list = list(itertools.permutations(
+            list(range(len(convex_pos_list))), 3))
+        sorted_convination_idxs_list_idx = sorted(list(range(len(convination_idxs_list))),
+                                                  key=[eval_func(np.array(
+                                                      [convex_pos_list[idx]+[0] for idx in idxs])) for idxs in convination_idxs_list].__getitem__,
+                                                  reverse=True)
+
+        for cp_idx in sorted_convination_idxs_list_idx:
+            # image_vertex_np = np.array(c_p)[:,:2].astype(np.float64)
+            image_vertex_np = np.array(
+                [convex_pos_list[p_idx] for p_idx in convination_idxs_list[cp_idx]]).astype(np.float64)
+            other_convex_pos_list = [convex_pos_list[i] for i in range(
+                len(convex_pos_list)) if i not in convination_idxs_list[cp_idx]]
+            for _, model_vertex in enumerate(list(itertools.permutations(convex_vertex_pos_list, 3))):
+                model_vertex_np = np.array(model_vertex).astype(np.float64)
+                num, rvecs, tvecs = cv2.solveP3P(model_vertex_np, image_vertex_np,
+                                                 cam_mat, dist, flags=cv2.SOLVEPNP_P3P)
+                # # モデルの頂点の投影位置を求める
+                for rvec, tvec in zip(rvecs, tvecs):
+                    conv_point, _ = cv2.projectPoints(
+                        convex_vertex_pos, rvec, tvec, cam_mat, dist)
+                    # conv_point_int = conv_point.astype(np.int64).reshape((-1, 2))
+                    if concave_vertex_pos.shape[0] != 0:
+                        conc_point, _ = cv2.projectPoints(
+                            concave_vertex_pos, rvec, tvec, cam_mat, dist)
+                    else :
+                        conc_point = np.zeros((0,3))
+                    # socore map base evaluation
+                    # score = eval_score(
+                    #     point_int, image_width, image_height, score_map, hidden_score_map, min_score)
+
+                    # distance base evaluation
+                    # score = 0
+                    # max_dist = 32
+                    # for p in point_int:
+                    #     if 0<=p[0]<image_width and 0<=p[1]<image_height:
+                    #         score -= min(max_dist, dist_img[p[1], p[0]])
+                    #     else:
+                    #         score -= max_dist
+
+
+
+                    match_cnt = 0
+                    dist_list = []
+
+                    # for p in point.reshape((-1, 2)):
+                    #     tmp_val = np.sort(np.linalg.norm(np.array(other_convex_pos_list)-p,axis=1))
+                    #     if tmp_val[0] < 5 and tmp_val[1]/tmp_val[0] > 20:
+                    #         match_cnt +=1
+                    #         dist_list.appned(tmp_val[0])
+
+                    for p in other_convex_pos_list:
+                        tmp_val = np.sort(np.linalg.norm(
+                            conv_point.reshape((-1, 2))-p, axis=1))
+                        if tmp_val[0] < 5 and tmp_val[1] > 20:
+                            match_cnt += 1
+                            dist_list.append(tmp_val[0])
+
+                    # for p in concave_pos_list:
+                    #     tmp_val = np.sort(np.linalg.norm(
+                    #         conc_point.reshape((-1, 2))-p, axis=1))
+                    #     if tmp_val[0] < 5 and tmp_val[1] > 20:
+                    #         match_cnt += 1
+                    #         dist_list.append(tmp_val[0])
+                            
+                    score = match_cnt
+                    mean_dist = np.mean(dist_list)
+                    # print(match_cnt, score, cut_score_th)
+                    if score > max_score or (score == max_score and best_mean_dist > mean_dist):
+                        max_score = score
+                        best_mean_dist = mean_dist
+                        max_score_dat = {
+                            "rvec": rvec,
+                            "tvec": tvec,
+                            "point": conv_point.reshape((-1, 2)),
+                        }
+                    cur_itr_num += 1
+                    if max_score > cut_score_th:
+                        break
+                if max_score > cut_score_th:
+                    break
+            # print(cur_itr_num)
+            if max_score > cut_score_th:
+                break
+
+    max_score_dat["itr_num"] = cur_itr_num
+    return max_score, max_score_dat
+
+    """
         for _, sample_dat_idx in enumerate(list(itertools.permutations(idxs, 3))):
             for _, model_vertex in enumerate(list(itertools.permutations(convex_vertex_pos_list, 3))):
                 # PnPで並進，回転ベクトルを求める
@@ -475,31 +641,39 @@ def fit2model_p3p(target_model, convex_pos, pred_convex, cam_mat, dist, image_wi
                     point, _ = cv2.projectPoints(
                         convex_vertex_pos, rvec, tvec, cam_mat, dist)
                     point_int = point.astype(np.int64).reshape((-1, 2))
-                    score_list = []
-                    for p in point_int:
-                        if p[0] >= 0 and p[1] >= 0 and p[0] < image_width and p[1] < image_height:
-                            value = float(score_map[p[1], p[0]])
-                            if value >= min_score:
-                                score_list.append(np.log10(value))
-                            else:
-                                score_list.append(min_logscore)
-                        else:
-                            score_list.append(min_logscore)
-                    # 出現した中で最大のものを保存する
-                    score_sum = np.sum(score_list)
-                    if score_sum > max_score:
-                        max_score = score_sum
+                    # score_list = []
+                    # for px, py in point_int:
+                    #     if px >= 0 and py >= 0 and px < image_width and py < image_height:
+                    #         if hidden_score_map is not None:
+                    #             value = max(float(score_map[py, px]), float(
+                    #                 hidden_score_map[py, px]))
+                    #         else:
+                    #             value = float(score_map[py, px])
+                    #         if value >= min_score:
+                    #             score_list.append(np.log10(value))
+                    #         else:
+                    #             score_list.append(min_logscore)
+                    #     else:
+                    #         score_list.append(min_logscore)
+                    # # 出現した中で最大のものを保存する
+                    # score_sum = np.sum(score_list)
+                    score = eval_score(
+                        point_int, image_width, image_height, score_map, hidden_score_map, min_score)
+                    if score > max_score:
+                        max_score = score
                         max_score_dat = {
                             "rvec": rvec,
                             "tvec": tvec,
                             "point": point.reshape((-1, 2)),
                         }
+                cur_itr_num += 1
                 if max_score > cut_score_th:
                     break
             if max_score > cut_score_th:
                 break
-
+    max_score_dat["itr_num"] = cur_itr_num
     return max_score, max_score_dat
+    """
 
 
 def quat2rvec(quat):
@@ -516,6 +690,58 @@ def get_Pscore(Pmat):
     return diff_trans, diff_rot
 
 
+bbox_lines = (
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
+)
+def make_result_image(image, target_model, max_score_dat, pred_convex, pred_hidden_convex, pred_convex_lm, cam_mat, dist):
+    result = image.copy()
+    bounding_point = target_model["bounding_point"]
+    bounding_img_point, _ = cv2.projectPoints(
+        bounding_point,
+        max_score_dat["rvec"],
+        max_score_dat["tvec"],
+        cam_mat,
+        dist,
+    )
+    bounding_img_point = bounding_img_point.reshape(
+        (-1, 2)).astype(np.int64)
+    for line in bbox_lines:
+        result = cv2.line(
+            result,
+            tuple(bounding_img_point[line[0]]),
+            tuple(bounding_img_point[line[1]]),
+            (255, 255, 255),
+            2,
+        )
+    if pred_hidden_convex is not None:
+        image_list = [
+            image,
+            cv2.cvtColor(
+                (pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+            #  cv2.cvtColor(
+            #      (pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+            cv2.cvtColor(
+                (pred_hidden_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+            cv2.cvtColor(
+                (pred_convex_lm.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
+            result,
+        ]
+    else:
+        image_list = [
+            image,
+            cv2.cvtColor(
+                (pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+            #  cv2.cvtColor(
+            #      (pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
+            cv2.cvtColor(
+                (pred_convex_lm.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
+            result,
+        ]
+    output_image = cv2.hconcat(image_list)
+    return output_image
+
 def main():
     from setuptools._distutils.util import strtobool
     parser = argparse.ArgumentParser(
@@ -530,15 +756,21 @@ def main():
         "--annotatefile", type=str, default="/dataset/puzzle_block/test/annotation.yaml"
     )
     parser.add_argument("--output", type=str, default="")
+    parser.add_argument("--outputdir", type=str, default="")
     parser.add_argument("--device", type=str,
                         default="cuda", choices=["cpu", "cuda"])
     parser.add_argument('--score_th', type=float,
-                        nargs='*', default=[0.5, 0.3, 0.25, 0.2, 0.15, 0.1])
+                        # nargs='*', default=[0.5, 0.3, 0.25, 0.2, 0.15, 0.1])
+                        nargs='*', default=[0.4, 0.3, 0.25, 0.2, 0.15, 0.1])
     parser.add_argument('--itr_num', type=int, default=0)
     parser.add_argument('--issort', type=strtobool, default=1)
     parser.add_argument('--use_p3p', type=strtobool, default=1)
     parser.add_argument('--use_ransac', type=strtobool, default=1)
     parser.add_argument('--cut_score_th', type=float, default=-7)
+    parser.add_argument('--eval_type', type=str,
+                        default='convination', choices=['area_size', 'prob', 'convination'])
+    
+    
     args = parser.parse_args()
 
     device = args.device
@@ -554,11 +786,6 @@ def main():
     model.eval()
 
     fitting_model = gen_fitting_model(anno_dat["blocks"], issort=issort)
-    lines = (
-        (0, 1), (1, 2), (2, 3), (3, 0),
-        (4, 5), (5, 6), (6, 7), (7, 4),
-        (0, 4), (1, 5), (2, 6), (3, 7),
-    )
 
     if args.input != "":
         cam_mat = np.array(anno_dat["annotations"]
@@ -566,18 +793,38 @@ def main():
         dist = np.zeros((5))
         start_time = time.time()
         image = cv2.imread(args.input)
-        (
-            pred_convex,
-            pred_concave,
-            pred_convex_lm,
-            pred_concave_lm,
-            convex_pos,
-            concave_pos,
-        ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
+        # (
+        #     pred_convex,
+        #     pred_concave,
+        #     pred_convex_lm,
+        #     pred_concave_lm,
+        #     convex_pos,
+        #     concave_pos,
+        # )
+        ret_dict = gen_featrue_map(
+            image, model, device, score_ths=args.score_th)
+        pred_convex = ret_dict["pred_convex"]
+        pred_concave = ret_dict["pred_concave"]
+        pred_convex_lm = ret_dict["pred_convex_lm"]
+        pred_concave_lm = ret_dict["pred_concave_lm"]
+        convex_pos = ret_dict["convex_pos"]
+        concave_pos = ret_dict["concave_pos"]
+        if "pred_hidden_convex" in ret_dict:
+            pred_hidden_convex = ret_dict["pred_hidden_convex"]
+        else:
+            pred_hidden_convex = None
+        if "pred_hidden_concave" in ret_dict:
+            pred_hidden_concave = ret_dict["pred_hidden_concave"]
+        else:
+            pred_hidden_concave = None
 
         if use_p3p:
             max_score, max_score_dat = fit2model_p3p(
-                fitting_model[args.blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac, cut_score_th=args.cut_score_th
+                fitting_model[args.blockmodel],
+                convex_pos, pred_convex,
+                concave_pos,  pred_concave,
+                cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac, cut_score_th=args.cut_score_th, pred_hidden_convex=pred_hidden_convex,
+                eval_type=args.eval_type
             )
         else:
             max_score, max_score_dat = fit2model(
@@ -618,67 +865,58 @@ def main():
     else:
         # 評価用コード
         proc_time = []
-        for anno in anno_dat["annotations"]:
+        for anno_idx, anno in enumerate(anno_dat["annotations"]):
+            # if anno_idx < 100:
+            #     continue
+            # if anno["imagefile"] in ['image_000007.png', 'image_000022.png', 'image_000047.png', 'image_000064.png', 'image_000072.png', 'image_000144.png']:
+            #     continue
+
             dist = np.zeros((5))
             image_file = os.path.join(os.path.dirname(
                 args.annotatefile), anno["imagefile"])
             cam_mat = np.array(anno["camera_matrix"]).reshape(3, 3)
             image = cv2.imread(image_file)
             blockmodel = anno["block_name"]
-            (
-                pred_convex,
-                pred_concave,
-                pred_convex_lm,
-                pred_concave_lm,
-                convex_pos,
-                concave_pos,
-            ) = gen_featrue_map(image, model, device, score_ths=args.score_th)
+
+            ret_dict = gen_featrue_map(
+                image, model, device, score_ths=args.score_th)
+            pred_convex = ret_dict["pred_convex"]
+            pred_concave = ret_dict["pred_concave"]
+            pred_convex_lm = ret_dict["pred_convex_lm"]
+            pred_concave_lm = ret_dict["pred_concave_lm"]
+            convex_pos = ret_dict["convex_pos"]
+            concave_pos = ret_dict["concave_pos"]
+            if "pred_hidden_convex" in ret_dict:
+                pred_hidden_convex = ret_dict["pred_hidden_convex"]
+            else:
+                pred_hidden_convex = None
+            if "pred_hidden_concave" in ret_dict:
+                pred_hidden_concave = ret_dict["pred_hidden_concave"]
+            else:
+                pred_hidden_concave = None
             start_time = time.time()
             if use_p3p:
                 max_score, max_score_dat = fit2model_p3p(
-                    fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac, cut_score_th=args.cut_score_th)
+                    fitting_model[blockmodel],
+                    convex_pos, pred_convex,
+                    concave_pos,  pred_concave,
+                    cam_mat, dist, itr_num=args.itr_num, use_ransac=use_ransac, cut_score_th=args.cut_score_th, pred_hidden_convex=pred_hidden_convex,
+                    eval_type=args.eval_type)
             else:
                 max_score, max_score_dat = fit2model(
                     fitting_model[blockmodel], convex_pos, pred_convex, cam_mat, dist, itr_num=args.itr_num, issort=issort, use_ransac=use_ransac)
             end_time = time.time()
             proc_time.append(end_time-start_time)
-            result = image.copy()
-            bounding_point = fitting_model[blockmodel]["bounding_point"]
-            bounding_img_point, _ = cv2.projectPoints(
-                bounding_point,
-                max_score_dat["rvec"],
-                max_score_dat["tvec"],
-                cam_mat,
-                dist,
-            )
-            bounding_img_point = bounding_img_point.reshape(
-                (-1, 2)).astype(np.int64)
-            for line in lines:
-                result = cv2.line(
-                    result,
-                    tuple(bounding_img_point[line[0]]),
-                    tuple(bounding_img_point[line[1]]),
-                    (255, 255, 255),
-                    2,
-                )
-            output_image = cv2.hconcat(
-                [image,
-                 cv2.cvtColor(
-                     (pred_convex.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
-                 cv2.cvtColor(
-                     (pred_concave.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR,),
-                 cv2.cvtColor(
-                     (pred_convex_lm.cpu() * 255).numpy().astype(np.uint8)[0, 0], cv2.COLOR_GRAY2BGR),
-                 result,
-                 ]
-            )
+
+            output_image = make_result_image(image, fitting_model[blockmodel], max_score_dat, pred_convex, pred_hidden_convex, pred_convex_lm, cam_mat, dist)
+
             if args.output != '':
                 cv2.imwrite(args.output, output_image)
             else:
-                os.makedirs('result', exist_ok=True)
+                os.makedirs(args.outputdir, exist_ok=True)
                 output_file = os.path.basename(
                     image_file).replace('image', 'result')
-                cv2.imwrite(os.path.join('result', output_file), output_image)
+                cv2.imwrite(os.path.join(args.outputdir, output_file), output_image)
 
             camera_rvec = quat2rvec(anno["camera_orientation"])
             R1, _ = cv2.Rodrigues(camera_rvec)
@@ -754,7 +992,8 @@ def main():
                     diff_rot = alt_diff_rot
                     diff_trans = alt_diff_trans
 
-            print(image_file, max_score, diff_trans, diff_rot, proc_time[-1])
+            print(image_file, max_score, diff_trans, diff_rot,
+                  proc_time[-1], max_score_dat["itr_num"])
 
             # _ = input()
         print(np.mean(proc_time))

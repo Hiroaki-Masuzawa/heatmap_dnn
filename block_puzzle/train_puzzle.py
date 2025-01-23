@@ -18,7 +18,7 @@ from collections import OrderedDict
 
 # headmap用データセット
 class HeadmapYAMLDatasets(torch.utils.data.Dataset):
-    def __init__(self, annotatefile_path, input_size=None, anno_size=5):
+    def __init__(self, annotatefile_path, input_size=None, anno_size=5, learn_hidden_ch=False):
         if annotatefile_path.split('.')[-1] == 'yaml':
             with open(annotatefile_path, encoding="utf-8") as f:
                 self.dat = yaml.safe_load(f)
@@ -28,6 +28,7 @@ class HeadmapYAMLDatasets(torch.utils.data.Dataset):
         self.dir = os.path.abspath(os.path.dirname(annotatefile_path))
         self.input_size = input_size
         self.anno_size = anno_size
+        self.learn_hidden_ch = learn_hidden_ch
 
     def __len__(self):
         return len(self.dat['annotations'])
@@ -38,20 +39,46 @@ class HeadmapYAMLDatasets(torch.utils.data.Dataset):
         if self.input_size is not None:
             image = cv2.resize(image, self.input_size)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255
-        label = np.zeros(list(image.shape[0:2]) + [2], dtype=np.uint8)
-        label_tmp = np.zeros(label.shape[0:2], dtype=np.uint8)
+        if self.learn_hidden_ch:
+            label = np.zeros(list(image.shape[0:2]) + [4], dtype=np.uint8)
+        else:
+            label = np.zeros(list(image.shape[0:2]) + [2], dtype=np.uint8)
+        label_tmp1 = np.zeros(label.shape[0:2], dtype=np.uint8)
+        label_tmp2 = np.zeros(label.shape[0:2], dtype=np.uint8)
 
         for p in np.array(self.dat['annotations'][idx]['convex_vertex']).reshape((-1, 3)):
-            if p[2] < 0.5:
-                continue
-            label_tmp = cv2.circle(label_tmp, (int(p[0]), int(p[1])), self.anno_size, 255, -1)
-        label[:, :, 0][label_tmp != 0] = 1
-        label_tmp = np.zeros(label.shape[0:2], dtype=np.uint8)
+            if p[2] > 0.5:
+                if self.anno_size > 0:
+                    label_tmp1 = cv2.circle(label_tmp1, (int(p[0]), int(p[1])), self.anno_size, 255, -1)
+                else :
+                    label_tmp1[int(p[1]), int(p[0])] = 255
+            else :
+                if self.learn_hidden_ch:
+                    if self.anno_size > 0:
+                        label_tmp2 = cv2.circle(label_tmp2, (int(p[0]), int(p[1])), self.anno_size, 255, -1)
+                    else :
+                        label_tmp2[int(p[1]), int(p[0])] = 255
+        label[:, :, 0][label_tmp1 != 0] = 1
+        if self.learn_hidden_ch:
+            label[:, :, 2][label_tmp2 != 0] = 1
+
+        label_tmp1 = np.zeros(label.shape[0:2], dtype=np.uint8)
+        label_tmp2 = np.zeros(label.shape[0:2], dtype=np.uint8)
         for p in np.array(self.dat['annotations'][idx]['concave_vertex']).reshape((-1, 3)):
-            if p[2] < 0.5:
-                continue
-            label_tmp = cv2.circle(label_tmp, (int(p[0]), int(p[1])), self.anno_size, 255, -1)
-        label[:, :, 1][label_tmp != 0] = 1
+            if p[2] > 0.5:
+                if self.anno_size > 0:
+                    label_tmp1 = cv2.circle(label_tmp1, (int(p[0]), int(p[1])), self.anno_size, 255, -1)
+                else :
+                    label_tmp1[int(p[1]), int(p[0])] = 255
+            else :
+                if self.learn_hidden_ch:
+                    if self.anno_size > 0:
+                        label_tmp2 = cv2.circle(label_tmp2, (int(p[0]), int(p[1])), self.anno_size, 255, -1)
+                    else :
+                        label_tmp1[int(p[1]), int(p[0])] = 255
+        label[:, :, 1][label_tmp1 != 0] = 1
+        if self.learn_hidden_ch:
+            label[:, :, 3][label_tmp2 != 0] = 1
 
         image = np.transpose(image, (2, 0, 1))
         label = np.transpose(label, (2, 0, 1))
@@ -77,6 +104,8 @@ if __name__ == '__main__':
     parser.add_argument('--arch', type=str, default='Unet')
     parser.add_argument('--encoder', type=str, default='resnet34')
     parser.add_argument('--classnum', type=int, default=2)
+    parser.add_argument('--anno_size', type=int, default=5)
+    parser.add_argument('--learn_hidden_ch', type=strtobool, default=0)
     args = parser.parse_args()
 
     inputsize = args.inputsize
@@ -94,6 +123,7 @@ if __name__ == '__main__':
     date_string = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
     outputdir = 'output-{}'.format(date_string) if args.output == '' else args.output
     use_amp = args.useamp == 1
+    learn_hidden_ch = args.learn_hidden_ch == 1
     scaler = torch.amp.GradScaler(enabled=use_amp, init_scale=4096)
 
     model = smp.create_model(
@@ -105,10 +135,10 @@ if __name__ == '__main__':
     model.to(device)
 
     # データローダ準備
-    trainset = HeadmapYAMLDatasets(args.trainyaml, input_size=inputsize)
+    trainset = HeadmapYAMLDatasets(args.trainyaml, input_size=inputsize, learn_hidden_ch=learn_hidden_ch, anno_size=args.anno_size)
     train_dataloader = torch.utils.data.DataLoader(trainset, batch_size=args.batchsize, shuffle=True, num_workers=8)
     if args.valyaml != "":
-        valset = HeadmapYAMLDatasets(args.valyaml, input_size=inputsize)
+        valset = HeadmapYAMLDatasets(args.valyaml, input_size=inputsize, learn_hidden_ch=learn_hidden_ch, anno_size=args.anno_size)
         val_dataloader = torch.utils.data.DataLoader(valset, batch_size=1, shuffle=False, num_workers=2)
 
     # 評価関数，最適化関数定義
@@ -152,10 +182,19 @@ if __name__ == '__main__':
                         else:
                             shape = (int(predicted_mask_work.shape[0]), 3, int(predicted_mask_work.shape[2]), int(predicted_mask_work.shape[3]))
                             predicted_mask_show = torch.zeros(*shape).to(predicted_mask_work.device).to(torch.float32)
-                            predicted_mask_show[:, 0:2] = predicted_mask_work
+                            predicted_mask_show[:, 0:2] = predicted_mask_work[:,0:2]
                             shape = (int(gt_masks.shape[0]), 3, int(gt_masks.shape[2]), int(gt_masks.shape[3]))
                             gt_masks_show = torch.zeros(*shape).to(gt_masks.device).to(torch.float32)
-                            gt_masks_show[:, 0:2] = gt_masks
+                            gt_masks_show[:, 0:2] = gt_masks[:,0:2]
+                            if learn_hidden_ch:
+                                shape = (int(predicted_mask_work.shape[0]), 3, int(predicted_mask_work.shape[2]), int(predicted_mask_work.shape[3]))
+                                predicted_mask_show_2 = torch.zeros(*shape).to(predicted_mask_work.device).to(torch.float32)
+                                shape = (int(gt_masks.shape[0]), 3, int(gt_masks.shape[2]), int(gt_masks.shape[3]))
+                                gt_masks_show_2 = torch.zeros(*shape).to(gt_masks.device).to(torch.float32)
+                                predicted_mask_show_2[:, 0:2] = predicted_mask_work[:,2:4]
+                                gt_masks_show_2[:, 0:2] = gt_masks[:,2:4]
+                                predicted_mask_show = torch.cat([predicted_mask_show, predicted_mask_show_2], dim=3)
+                                gt_masks_show = torch.cat([gt_masks_show, gt_masks_show_2], dim=3)
 
                         # print(images.shape, gt_masks_show.shape, predicted_mask_show.shape)
                         img_sample = (torch.cat([images, gt_masks_show, predicted_mask_show], dim=3) * 255).to(torch.uint8)
@@ -186,7 +225,7 @@ if __name__ == '__main__':
                 writer.add_scalar("validation/metric/mae", np.mean(metric_mae_list), ep + 1)
                 writer.add_scalar("validation/metric/mse", np.mean(metric_mse_list), ep + 1)
                 model.train()
-
-            torch.save(model, os.path.join(outputdir, "model_{0:03d}.pth".format(ep + 1)))
+            if (ep+1)%5==0 or (ep+1) == args.epoch:
+                torch.save(model, os.path.join(outputdir, "model_{0:03d}.pth".format(ep + 1)))
     # end epoch loop
     writer.close()
