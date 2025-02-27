@@ -840,7 +840,7 @@ def main():
         )
         bounding_img_point = bounding_img_point.reshape(
             (-1, 2)).astype(np.int64)
-        for line in lines:
+        for line in bbox_lines:
             result = cv2.line(
                 result,
                 tuple(bounding_img_point[line[0]]),
